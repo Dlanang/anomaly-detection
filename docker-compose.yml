@@ -1,0 +1,148 @@
+# =============================================================================
+# docker-compose.yml – Foxy Anomaly Detection
+# Docker Compose v2 modern format (tanpa field 'version' yang deprecated)
+#
+# Arsitektur:
+#   Internet → [NPM / HTTPS] → [nginx:8080] → [streamlit:8501]
+#   Streamlit TIDAK pernah expose langsung ke internet
+# =============================================================================
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # SERVICE 1: Streamlit Application
+  # ─────────────────────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Hint ke Docker BuildKit untuk reuse layer dari image base
+      cache_from:
+        - python:3.11-slim
+    image: foxy-anomaly-detection:latest
+    container_name: foxy-app
+    restart: unless-stopped   # Auto-restart kecuali sengaja di-stop
+
+    # Hanya expose ke internal network — TIDAK publish ke host
+    expose:
+      - "8501"
+
+    networks:
+      - foxy-net
+
+    # ── Environment variables ──────────────────────────────────────────────
+    # Semua env var bisa di-override via .env file atau saat runtime
+    environment:
+      STREAMLIT_SERVER_PORT: "8501"
+      STREAMLIT_SERVER_ADDRESS: "0.0.0.0"
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+      STREAMLIT_SERVER_ENABLE_CORS: "false"
+      STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION: "false"
+      STREAMLIT_SERVER_MAX_UPLOAD_SIZE: "200"
+      STREAMLIT_SERVER_MAX_MESSAGE_SIZE: "200"
+      MPLBACKEND: "Agg"
+      MPLCONFIGDIR: "/tmp/matplotlib"
+      PYTHONUNBUFFERED: "1"
+
+    # Uncomment untuk load secrets dari .env file (tidak perlu commit ke git)
+    # env_file:
+    #   - .env
+
+    # ── Health check ──────────────────────────────────────────────────────
+    # Digunakan oleh nginx 'depends_on: condition: service_healthy'
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
+      interval: 30s
+      timeout: 10s
+      start_period: 60s   # ML import (numpy/scipy/sklearn) butuh waktu
+      retries: 3
+
+    # ── Resource limits ───────────────────────────────────────────────────
+    # VPS minimum: 2 vCPU, 2GB RAM
+    # Sesuaikan dengan spesifikasi VPS Anda
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"       # Max 1.5 core (Isolation Forest bisa CPU-intensive)
+          memory: "1536M"   # 1.5 GB (scipy/sklearn cukup berat di memory)
+        reservations:
+          cpus: "0.25"
+          memory: "512M"
+
+    # Logging — mencegah log membesar tanpa batas
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # SERVICE 2: Internal Nginx Reverse Proxy
+  # Image: nginx:1.27-alpine (~22 MB) — sangat ringan
+  # Fungsi: buffer, WebSocket upgrade, header forwarding ke Streamlit
+  # ─────────────────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: foxy-nginx
+    restart: unless-stopped
+
+    # Bind HANYA ke loopback interface (127.0.0.1)
+    # → Port 8080 TIDAK terbuka ke internet/publik
+    # → Hanya NPM Plus (yang berjalan di VPS yang sama) yang bisa mengakses
+    # Format: "127.0.0.1:HOST_PORT:CONTAINER_PORT"
+    ports:
+      - "127.0.0.1:8089:80"
+
+    networks:
+      - foxy-net
+
+    volumes:
+      # Mount nginx config sebagai read-only (keamanan)
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+    # Nginx hanya start setelah Streamlit benar-benar healthy
+    depends_on:
+      app:
+        condition: service_healthy
+
+    # ── Health check untuk nginx ──────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+    # ── Resource limits ───────────────────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "64M"
+        reservations:
+          cpus: "0.05"
+          memory: "16M"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  foxy-net:
+    driver: bridge
+    name: foxy-network
+    # internal: true  # Uncomment jika ingin isolasi total dari internet
+    #                 # (app tidak bisa akses internet tapi NPM tetap bisa connect
+    #                 #  ke nginx via port mapping)

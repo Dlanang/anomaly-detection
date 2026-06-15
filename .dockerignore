@@ -1,0 +1,110 @@
+# =============================================================================
+# .dockerignore – Foxy Anomaly Detection
+# Tujuan: hanya kirim file yang BENAR-BENAR dibutuhkan ke Docker build context.
+# Semakin kecil build context → build lebih cepat + image lebih kecil + aman.
+# =============================================================================
+
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+
+# ── Docker files sendiri (tidak perlu masuk image) ────────────────────────────
+Dockerfile
+Dockerfile.*
+docker-compose.yml
+docker-compose*.yml
+.dockerignore
+nginx/
+
+# ── Python build artifacts ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ── Virtual environments (gunakan requirements.txt saja) ─────────────────────
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# ── Secrets & environment files (JANGAN pernah masuk image) ──────────────────
+.env
+.env.*
+*.env
+!requirements.txt      # Exception: requirements.txt HARUS masuk
+secrets.toml
+.streamlit/secrets.toml
+*.pem
+*.key
+*.crt
+*.p12
+
+# ── Data files (upload user, tidak boleh di-bake ke image) ───────────────────
+*.csv
+*.json
+*.jsonl
+*.log
+*.pcap
+*.pcapng
+*.xlsx
+*.xls
+*.parquet
+
+# ── Report outputs ────────────────────────────────────────────────────────────
+incident_report_*.txt
+incident_report_*.pdf
+mitigation_plan_*.txt
+
+# ── Jupyter Notebook artifacts ────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── OS generated files ────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── IDE & editor files ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ── Testing & coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+
+# ── Documentation (tidak dibutuhkan di runtime) ───────────────────────────────
+README*
+CHANGELOG*
+CONTRIBUTING*
+docs/
+*.md
