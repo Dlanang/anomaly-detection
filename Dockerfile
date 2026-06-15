@@ -23,7 +23,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         gcc \
         g++ \
-        libgomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Buat isolated virtual environment
