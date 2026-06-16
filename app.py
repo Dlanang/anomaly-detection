@@ -741,7 +741,7 @@ with st.sidebar:
     st.markdown("---")
     uploaded  = st.file_uploader("Upload JSONL / JSON file", type=["json","jsonl"])
     st.markdown("**Contamination rate**")
-    cont_rate = st.slider( "" min_value=0.01, max_value=0.50, value=0.01, step=0.01)
+    cont_rate = st.slider( "", min_value=0.01, max_value=0.50, value=0.01, step=0.01)
     st.caption(f"**{cont_rate:.0%}** of records flagged as anomalies")
     st.markdown("---")
     run_btn   = st.button("▶  Run Detection", use_container_width=True, type="primary")
