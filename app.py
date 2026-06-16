@@ -18,6 +18,8 @@ import matplotlib.patches as mpatches
 import seaborn as sns
 import streamlit as st
 
+from core import build_stats, run_detection_pipeline
+
 matplotlib.use("Agg")
 warnings.filterwarnings("ignore")
 
@@ -180,41 +182,11 @@ def pca2(X):
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def run_analysis(file_bytes:bytes, cont:float):
-    logs=[]
     try:
-        for ln in file_bytes.decode("utf-8").splitlines():
-            if ln.strip(): logs.append(json.loads(ln))
-        df=pd.DataFrame(logs)
-    except Exception as e: return None,None,str(e)
-    if df.empty: return None,None,"File produced no rows."
-    for col in list(df.columns):
-        if any(isinstance(x,dict) for x in df[col].dropna()):
-            try:
-                mask=df[col].apply(lambda x:isinstance(x,dict))
-                flat=pd.json_normalize(df.loc[mask,col]).add_prefix(f"{col}_")
-                flat.index=df[mask].index
-                df=df.drop(columns=[col]).join(flat)
-            except: pass
-    for col in df.columns:
-        if any(isinstance(x,list) for x in df[col].dropna()):
-            df[col]=df[col].apply(lambda x:str(x) if isinstance(x,list) else x)
-    excl={"timestamp","src_ip","dest_ip","flow_id","in_iface","pkt_src","app_proto","proto"}
-    num=[c for c in df.select_dtypes(include=np.number).columns if c not in excl]
-    cat=[c for c in df.select_dtypes(include=["object","bool"]).columns if c not in excl]
-    for col in num:
-        if df[col].isnull().any(): df[col]=df[col].fillna(df[col].mean())
-    enc=pd.get_dummies(df[cat],dummy_na=True,drop_first=True,dtype=int) if cat else pd.DataFrame(index=df.index)
-    scaler=Scaler()
-    scaled=pd.DataFrame(scaler.fit_transform(df[num]),columns=num,index=df.index) if num else pd.DataFrame(index=df.index)
-    X=pd.concat([scaled,enc],axis=1).replace([np.inf,-np.inf],np.nan).dropna(axis=1)
-    if X.empty: return None,None,"No usable features."
-    model=IForest(n=100,s=min(256,len(X)),cont=cont,seed=42)
-    model.fit(X.values)
-    df=df.copy()
-    df["anomaly_prediction"]=model.predict(X.values)
-    df["anomaly_score"]=model.score(X.values)
-    df["predicted_label"]=(df["anomaly_prediction"]==-1).astype(int)
-    return df,X,None
+        df, X, telemetry = run_detection_pipeline(file_bytes, contamination=cont)
+        return df, X, None
+    except Exception as e:
+        return None, None, str(e)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Report data builder
@@ -707,6 +679,58 @@ def dash_event(df):
     for s in a.spines.values(): s.set_edgecolor(BORDER)
     f.tight_layout(); return f
 
+def dash_pie_prediction(stats):
+    _mpl_dark(); f,a=plt.subplots(figsize=(6,3.8),facecolor=DARK_BG); a.set_facecolor(CARD_BG)
+    vals=[stats["normal"],stats["anomaly"]]
+    labels=["Normal","Anomaly"]
+    colors=[GREEN,CRIMSON]
+    if sum(vals)==0:
+        vals=[1,0]
+    a.pie(vals,labels=labels,colors=colors,autopct=lambda p:f"{p:.1f}%" if p>0 else "",
+          startangle=90,textprops={"color":TEXT_PRI},wedgeprops={"edgecolor":CARD_BG,"linewidth":1})
+    a.set_title("Normal vs Anomaly")
+    f.tight_layout(); return f
+
+def dash_anomaly_trend(df):
+    _mpl_dark(); f,a=plt.subplots(figsize=(8,3.8),facecolor=DARK_BG); a.set_facecolor(CARD_BG)
+    anom=df[df["anomaly"]==-1].copy()
+    if anom.empty:
+        trend=pd.Series(dtype=int)
+    elif "timestamp" in anom.columns:
+        ts=pd.to_datetime(anom["timestamp"],errors="coerce")
+        trend=anom.assign(_ts=ts).dropna(subset=["_ts"]).set_index("_ts").resample("1min").size()
+        if trend.empty:
+            trend=anom.reset_index().groupby(anom.reset_index().index//100).size()
+    else:
+        trend=anom.reset_index().groupby(anom.reset_index().index//100).size()
+    if trend.empty:
+        a.bar(["No anomaly"],[0],color=CRIMSON)
+    else:
+        a.bar([str(x) for x in trend.index],trend.values,color=CRIMSON,edgecolor="none")
+    a.set_title("Anomaly trend"); a.set_xlabel("Time bucket"); a.set_ylabel("Anomaly count")
+    a.tick_params(axis="x",rotation=30); a.grid(True,axis="y")
+    for s in a.spines.values(): s.set_edgecolor(BORDER)
+    f.tight_layout(); return f
+
+def dash_top_anomaly_ip(df, col, title):
+    if col not in df.columns: return None
+    _mpl_dark(); top=df[df["anomaly"]==-1][col].astype(str).value_counts().head(10)
+    f,a=plt.subplots(figsize=(8,3.8),facecolor=DARK_BG); a.set_facecolor(CARD_BG)
+    if top.empty:
+        a.barh(["No anomaly"],[0],color=CRIMSON)
+    else:
+        a.barh(top.index[::-1],top.values[::-1],color=CRIMSON,edgecolor="none")
+    a.set_title(title); a.set_xlabel("Anomaly count")
+    a.grid(True,axis="x")
+    for s in a.spines.values(): s.set_edgecolor(BORDER)
+    f.tight_layout(); return f
+
+def display_predictions_table(table_df):
+    shown=table_df.copy()
+    if "anomaly_score" in shown.columns:
+        shown["anomaly_score"]=shown["anomaly_score"].round(4)
+    st.dataframe(shown,use_container_width=True,hide_index=True)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar
 # ─────────────────────────────────────────────────────────────────────────────
@@ -717,7 +741,7 @@ with st.sidebar:
     st.markdown("---")
     uploaded  = st.file_uploader("Upload JSONL / JSON file", type=["json","jsonl"])
     st.markdown("**Contamination rate**")
-    cont_rate = st.slider("", min_value=0.01, max_value=0.50, value=0.05, step=0.01)
+    cont_rate = st.slider("", min_value=0.01, max_value=0.50, value=0.01, step=0.01)
     st.caption(f"**{cont_rate:.0%}** of records flagged as anomalies")
     st.markdown("---")
     run_btn   = st.button("▶  Run Detection", use_container_width=True, type="primary")
@@ -760,9 +784,12 @@ if "df" not in st.session_state:
 df   = st.session_state["df"]
 X    = st.session_state["X"]
 cont = st.session_state["cont"]
-n_a  = int((df["predicted_label"]==1).sum())
-n_n  = int((df["predicted_label"]==0).sum())
-tot  = len(df); rat = n_a/tot if tot else 0
+stats = build_stats(df)
+n_a  = int(stats["anomaly"])
+n_n  = int(stats["normal"])
+tot  = int(stats["total_records"])
+rat = float(stats["anomaly_percentage"]) / 100 if tot else 0
+normal_rat = float(stats["normal_percentage"]) / 100 if tot else 0
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Banner + metrics
@@ -784,10 +811,10 @@ st.markdown(f"""
 </div>""", unsafe_allow_html=True)
 
 c1,c2,c3,c4=st.columns(4)
-c1.metric("Total records", f"{tot:,}")
-c2.metric("Anomalies 🔴",  f"{n_a:,}",  delta=f"{rat:.1%} of total",   delta_color="inverse")
-c3.metric("Normal 🟢",     f"{n_n:,}",  delta=f"{1-rat:.1%} of total")
-c4.metric("Anomaly ratio", f"{rat:.2%}")
+c1.metric("Total Records", f"{tot:,}")
+c2.metric("Normal", f"{n_n:,}", delta=f"{normal_rat:.2%} of total")
+c3.metric("Anomaly", f"{n_a:,}", delta=f"{rat:.2%} of total", delta_color="inverse")
+c4.metric("Detection Rate", f"{rat:.2%}")
 st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -797,32 +824,50 @@ st.markdown("<div class='s-card'><div class='s-card-title'>📊 Visualisations</
             unsafe_allow_html=True)
 r1l,r1r=st.columns(2)
 with r1l:
-    f=dash_score(df); st.pyplot(f); plt.close(f)
+    f=dash_pie_prediction(stats); st.pyplot(f); plt.close(f)
 with r1r:
-    f=dash_top15(df); st.pyplot(f); plt.close(f)
+    f=dash_anomaly_trend(df); st.pyplot(f); plt.close(f)
 r2l,r2r=st.columns(2)
 with r2l:
-    f=dash_pca(df,X)
+    f=dash_top_anomaly_ip(df,"src_ip","Top Source IP Anomaly")
     if f: st.pyplot(f); plt.close(f)
-    else: st.info("Too few features for PCA.")
+    else: st.info("No `src_ip` column.")
 with r2r:
-    f=dash_event(df)
+    f=dash_top_anomaly_ip(df,"dest_ip","Top Destination IP Anomaly")
     if f: st.pyplot(f); plt.close(f)
-    else: st.info("No `event_type` column.")
+    else: st.info("No `dest_ip` column.")
+with st.expander("Additional model diagnostics", expanded=False):
+    d1,d2=st.columns(2)
+    with d1:
+        f=dash_score(df); st.pyplot(f); plt.close(f)
+    with d2:
+        f=dash_top15(df); st.pyplot(f); plt.close(f)
+    d3,d4=st.columns(2)
+    with d3:
+        f=dash_pca(df,X)
+        if f: st.pyplot(f); plt.close(f)
+        else: st.info("Too few features for PCA.")
+    with d4:
+        f=dash_event(df)
+        if f: st.pyplot(f); plt.close(f)
+        else: st.info("No `event_type` column.")
 st.markdown("</div>",unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Top 20 table
+# Prediction tables
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("<div class='s-card'><div class='s-card-title'>📋 Top 20 anomalous records</div>",
+st.markdown("<div class='s-card'><div class='s-card-title'>Prediction Records</div>",
             unsafe_allow_html=True)
-dcols=[c for c in ["timestamp","event_type","src_ip","dest_ip","proto","anomaly_score","predicted_label"] if c in df.columns]
-tbl=df.sort_values("anomaly_score").head(20)[dcols].copy()
-if "predicted_label" in tbl.columns:
-    tbl["predicted_label"]=tbl["predicted_label"].map({1:"🔴 Anomaly",0:"🟢 Normal"})
-if "anomaly_score" in tbl.columns:
-    tbl["anomaly_score"]=tbl["anomaly_score"].round(4)
-st.dataframe(tbl,use_container_width=True,hide_index=True)
+dcols=[c for c in ["timestamp","event_type","src_ip","dest_ip","proto","anomaly","prediction_label","anomaly_score"] if c in df.columns]
+extra_cols=[c for c in df.columns if c not in dcols]
+view_df=df[dcols+extra_cols].copy()
+all_tab, anomaly_tab, normal_tab = st.tabs(["All Records", "Only Anomaly", "Only Normal"])
+with all_tab:
+    display_predictions_table(view_df)
+with anomaly_tab:
+    display_predictions_table(view_df[view_df["anomaly"]==-1])
+with normal_tab:
+    display_predictions_table(view_df[view_df["anomaly"]==1])
 st.markdown("</div>",unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────

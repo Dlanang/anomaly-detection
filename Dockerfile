@@ -73,7 +73,13 @@ RUN apt-get update \
 ENV PATH="/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONFAULTHANDLER=1
+    PYTHONFAULTHANDLER=1 \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
+    VECLIB_MAXIMUM_THREADS=1 \
+    UVICORN_WORKERS=1
 
 # ── Streamlit server configuration ────────────────────────────────────────────
 # Menggunakan env vars (mirror dari .streamlit/config.toml) agar bisa
@@ -82,6 +88,7 @@ ENV STREAMLIT_SERVER_PORT=8501 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_SERVER_HEADLESS=true \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    STREAMLIT_SERVER_FILE_WATCHER_TYPE=none \
     STREAMLIT_SERVER_ENABLE_CORS=false \
     STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false \
     STREAMLIT_SERVER_MAX_UPLOAD_SIZE=200 \
@@ -96,7 +103,7 @@ ENV MPLBACKEND=Agg \
 
 # ── Copy source code (TERAKHIR untuk cache optimization) ─────────────────────
 # Hanya app.py yang di-copy — tidak ada file lain yang disentuh
-COPY app.py .
+COPY app.py app_api.py core.py ./
 
 # ── Security: non-root user ───────────────────────────────────────────────────
 # Explicit UID/GID 1001 untuk konsistensi di seluruh environment
@@ -110,7 +117,7 @@ RUN groupadd -g 1001 appgroup \
 USER appuser
 
 # Port internal Streamlit (TIDAK expose ke host langsung)
-EXPOSE 8501
+EXPOSE 8501 8000
 
 # ── Health check ──────────────────────────────────────────────────────────────
 # /_stcore/health adalah endpoint built-in Streamlit (sejak v1.8+)
@@ -121,13 +128,11 @@ HEALTHCHECK --interval=30s \
             --retries=3 \
     CMD python -c \
         "import urllib.request; \
-         urllib.request.urlopen('http://localhost:8501/_stcore/health')" \
+         urllib.request.urlopen('http://localhost:8501/_stcore/health'); \
+         urllib.request.urlopen('http://localhost:8000/health')" \
         || exit 1
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 # Exec form (bukan shell form) → PID 1 adalah streamlit → sinyal SIGTERM/SIGINT
 # diterima langsung oleh proses, tidak hilang karena shell wrapper
-CMD ["streamlit", "run", "app.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true"]
+CMD ["sh", "-c", "uvicorn app_api:api --host 0.0.0.0 --port 8000 --workers 1 --loop asyncio --timeout-keep-alive 5 & streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true --server.fileWatcherType=none"]
