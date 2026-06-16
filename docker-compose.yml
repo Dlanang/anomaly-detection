@@ -51,26 +51,26 @@ services:
     #   - .env
 
     # ── Health check ──────────────────────────────────────────────────────
-    healthcheck:
-      test:
-        - "CMD"
-        - "python"
-        - "-c"
-        - "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
-      interval: 30s
-      timeout: 10s
-      start_period: 60s
-      retries: 3
+#    healthcheck:
+#      test:
+#        - "CMD"
+#       - "python"
+#        - "-c"
+#        - "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
+#      interval: 30s
+#      timeout: 10s
+#      start_period: 60s
+#      retries: 3
 
     # ── Resource limits ───────────────────────────────────────────────────
-    deploy:
-      resources:
-        limits:
-          cpus: "1.5"
-          memory: "1536M"
-        reservations:
-          cpus: "0.25"
-          memory: "512M"
+#   deploy:
+#     resources:
+#        limits:
+#          cpus: "1"
+#          memory: "1536M"
+#        reservations:
+#          cpus: "0.25"
+#          memory: "512M"
 
     logging:
       driver: json-file
