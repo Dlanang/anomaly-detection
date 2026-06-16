@@ -10,7 +10,7 @@
 #   - WebSocket upgrade (via toggle Websockets Support)
 #   - Reverse proxy & header forwarding
 # =============================================================================
-
+name: anomaly-detection-dev
 services:
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -22,16 +22,16 @@ services:
       dockerfile: Dockerfile
       cache_from:
         - python:3.11-slim
-    image: foxy-anomaly-detection:latest
-    container_name: foxy-app
+    image: foxy-anomaly-detection-dev:latest
+    container_name: foxy-app-dev
     restart: unless-stopped
 
     # Bind HANYA ke loopback interface (127.0.0.1)
     # → Port 8501 TIDAK terbuka ke internet/publik
     # → Hanya NPM Plus (di VPS yang sama) yang bisa mengakses
     ports:
-      - "127.0.0.1:8501:8501"
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:18501:8501"
+      - "127.0.0.1:18000:8000"
 
     cpus: "1.0"
     mem_limit: "1g"
